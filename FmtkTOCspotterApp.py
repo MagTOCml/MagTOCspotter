@@ -16,6 +16,8 @@
 # limitations under the License.
 
 import os
+import shutil
+from datetime import date
 import threading
 from configparser import ConfigParser
 from pathlib import Path
@@ -212,8 +214,6 @@ class TOCspotterGui(FmtkTOCspotterGui):
         """
         If self.save_toc_img is True, save the image. In all cases,
         remember/save the toc_spec.
-        :param event: wx.Event
-        :return: None
         """
         if event.ClassName == 'wxCommandEvent' or \
                 (event.ClassName == 'wxKeyEvent' and
@@ -246,9 +246,13 @@ class TOCspotterGui(FmtkTOCspotterGui):
             self.app.forget_toc(item_id, self.app.leaf_num)
             # event.Skip()
 
-    def evt_queue_issues(self, event):
-        self.queue_issues(event)
-        # event.Skip()
+    def evt_update_csv_data(self, event):
+        """Download the latest CSV data and update the database."""
+        if event.ClassName == 'wxCommandEvent' or \
+                (event.ClassName == 'wxKeyEvent' and
+                 event.GetKeyCode() not in (wx.WXK_TAB, wx.WXK_SHIFT)):
+            self.app.update_csv_data()
+        event.Skip()
 
     def queue_issues(self, event):
         if event.ClassName == 'wxCommandEvent' or \
@@ -303,7 +307,7 @@ class FmtkTOCspotterApp(wx.App):
         self.queue_size = int(self.config['Persistent variables']['queue_size'])
         self.more_pages = int(self.config['Persistent variables']['more_pages'])
         self.save_toc_imgs = self.config['Persistent variables'].getboolean(
-            'save_to_imgs')
+            'save_toc_imgs')
         # 'pfn' is the path and filename of the CSV-format TOC file, etc.
         toc_pfn = self.config['Paths and Filenames']['spotted_tocs_pfn']
         compmags_pfn = self.config['Paths and Filenames']['compmags_pfn']
@@ -327,7 +331,7 @@ class FmtkTOCspotterApp(wx.App):
         self.pil_img2buffer = wx.Image(100, 100)
         self.buffer = wx.NullBitmap
 
-        # Image grabbing threads post these messages and we react...
+        # Image grabbing threads post these messages, and we react...
         pub.subscribe(self.queue_updated, 'image_ready')
         pub.subscribe(self.queue_problem, 'image_not_found')
         pub.subscribe(self.queue_problem, 'server_not_found')
@@ -580,6 +584,39 @@ class FmtkTOCspotterApp(wx.App):
                     self.frame.toc_not.Enable()
                 return True
         return False
+
+    def update_csv_data(self):
+        dlg = wx.MessageDialog(None, "Do you want to update your CSV tocdata "
+                                     "files? \n (Current files are archived.)",
+                               "Update CSV", wx.YES_NO | wx.ICON_QUESTION)
+        result = dlg.ShowModal()
+        if result == wx.ID_YES:
+            date_str = date.today().strftime('%m%d%y')
+
+            # Archive current files
+            if not os.path.exists('./tocdata/archive'):
+                os.makedirs('./tocdata/archive')
+            if os.path.exists('./tocdata/spotted_tocs.csv'):
+                shutil.move('./tocdata/spotted_tocs.csv',
+                            f'./tocdata/archive/spotted_tocs_{date_str}.csv')
+            if os.path.exists('./tocdata/done_pubs.csv'):
+                shutil.move('./tocdata/done_pubs.csv',
+                            f'./tocdata/archive/done_pubs_{date_str}.csv')
+            # Update current files
+            st_url = "https://raw.githubusercontent.com/MagTOCml/MagTOCdata" \
+                     "/main/tocdata/spotted_tocs.csv"
+            dp_url = "https://raw.githubusercontent.com/MagTOCml/MagTOCdata" \
+                     "/main/tocdata/done_pubs.csv"
+            self.spotted_tocs = pd.read_csv(st_url, header=0, index_col=False)
+            self.spotted_tocs.to_csv('./tocdata/spotted_tocs.csv', header=True,
+                                     index=False)
+            self.done_pubs = pd.read_csv(dp_url, header=0, index_col=False)
+            self.done_pubs.to_csv('./tocdata/done_pubs.csv', header=True,
+                                  index=False)
+            self.frame.StatusBar.SetStatusText('Updated and archived CSV '
+                                               'files.', 1)
+        else:
+            self.frame.StatusBar.SetStatusText('CSV files not updated.', 1)
 
 
 # end of class FmtkTOCspotterApp

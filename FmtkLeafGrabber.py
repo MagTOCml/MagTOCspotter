@@ -91,7 +91,7 @@ class FmtkLeafGrabber(Thread):
 
     def run(self):
         """Run GetImage Worker Thread to grab an image from the local_leafdir,
-          if available. Otherwise download from the Internet Archive."""
+          if available. Otherwise, download from the Internet Archive."""
         with self.sema4:
             name = threading.currentThread().getName()
             self.img_pool.make_active(name)
@@ -175,8 +175,7 @@ class FmtkLeafGrabber(Thread):
             self.current_leaf).zfill(4) + '.jpg'
         leaf_file = Path(save_img_path)
         if not leaf_file.is_file():
-            img = self.pil_image.save(save_img_path)
+            self.pil_image.save(save_img_path)
         else:
             print("Oops, should not happen!?")
-            img = None
-        return img
+        return

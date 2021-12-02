@@ -29,8 +29,9 @@ class FmtkTOCspotterGui(Frame):
 
         self.frame_menubar = wx.MenuBar(0)
         self.m_menu1 = wx.Menu()
-        self.m_menuItem1 = wx.MenuItem(self.m_menu1, wx.ID_ANY, u"Queue issues",
-                                       wx.EmptyString, wx.ITEM_NORMAL)
+        self.m_menuItem1 = wx.MenuItem(self.m_menu1, wx.ID_ANY,
+                                       u"Update CSV data...", wx.EmptyString,
+                                       wx.ITEM_NORMAL)
         self.m_menu1.Append(self.m_menuItem1)
 
         self.m_menuItem2 = wx.MenuItem(self.m_menu1, wx.ID_ANY, u"Settings...",
@@ -180,7 +181,7 @@ class FmtkTOCspotterGui(Frame):
         self.Layout()
 
         # Connect Events
-        self.Bind(wx.EVT_MENU, self.evt_queue_issues,
+        self.Bind(wx.EVT_MENU, self.evt_update_csv_data,
                   id=self.m_menuItem1.GetId())
         self.Bind(wx.EVT_MENU, self.evt_edit_settings,
                   id=self.m_menuItem2.GetId())
@@ -209,7 +210,7 @@ class FmtkTOCspotterGui(Frame):
         pass
 
     # Virtual event handlers, override them in your derived class
-    def evt_queue_issues(self, event):
+    def evt_update_csv_data(self, event):
         event.Skip()
 
     def evt_edit_settings(self, event):
