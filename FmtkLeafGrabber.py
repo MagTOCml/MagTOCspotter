@@ -21,6 +21,7 @@ import pickle
 import threading
 from pathlib import Path
 from threading import Thread
+import certifi
 from urllib.error import URLError, HTTPError
 from urllib.request import Request, urlopen
 
@@ -85,7 +86,7 @@ class FmtkLeafGrabber(Thread):
         self.img_pool = img_pool
         self.pil_image = Image.Image()
         # logging.debug('Ready to launch a thread...')
-        self.setDaemon(True)
+        self.daemon = True
         self.start()  # start the thread
         # self.join()
 
@@ -93,7 +94,7 @@ class FmtkLeafGrabber(Thread):
         """Run GetImage Worker Thread to grab an image from the local_leafdir,
           if available. Otherwise, download from the Internet Archive."""
         with self.sema4:
-            name = threading.currentThread().getName()
+            name = threading.current_thread().name
             self.img_pool.make_active(name)
             if self.current_leaf == 'missing':
                 self.image_unavailable()
@@ -106,21 +107,26 @@ class FmtkLeafGrabber(Thread):
                                       self.item_id + "/page/leaf" +
                                       str(self.current_leaf))
                     try:
-                        reply = urlopen(request)
+                        reply = urlopen(request, cafile=certifi.where())
                     except HTTPError as err:
                         # print('The server could not fulfill the request.')
                         # print('Error code: ', err.code)
+                        if err is not None:
+                            errcode = err.code
+                        else:
+                            errcode = 'None'
                         wx.CallAfter(lambda *a: pub.sendMessage(
                             "image_not_found",
                             err_msg='The server could not fulfill the request.',
-                            err_code=404))
+                            err_code=errcode))
                     except URLError as err:
                         # print('We failed to reach a server.')
                         print('Reason: ', err.reason)
+                        reason = err.reason
                         wx.CallAfter(lambda *a: pub.sendMessage(
                             "server_not_found",
                             err_msg='We failed to reach a server.',
-                            err_code=err.reason))
+                            err_code=reason))
                     else:
                         self.pil_image = Image.open(reply)
                         # Do the full-page image scaled to device frame..

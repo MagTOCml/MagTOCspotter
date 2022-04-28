@@ -8,7 +8,7 @@
 ###########################################################################
 
 import wx
-import wx.xrc
+# import wx.xrc
 from wx import Frame
 
 ID_PREVPG = 1000
@@ -80,7 +80,7 @@ class FmtkTOCspotterGui(Frame):
 
         sb_sizer1.Add(b_sizer8, 1, wx.ALIGN_CENTER_HORIZONTAL | wx.BOTTOM, 3)
 
-        current_issue_choices = [u"No choices yet..."]
+        current_issue_choices = [u"'Next batch' to begin..."]
         self.current_issue = wx.Choice(sb_sizer1.GetStaticBox(), wx.ID_ANY,
                                        wx.DefaultPosition, wx.DefaultSize,
                                        current_issue_choices, 0)
@@ -192,7 +192,8 @@ class FmtkTOCspotterGui(Frame):
         self.more_issues.Bind(wx.EVT_BUTTON, self.evt_next_batch)
         self.more_issues.Bind(wx.EVT_KEY_DOWN, self.evt_next_batch)
         self.current_issue.Bind(wx.EVT_CHOICE, self.evt_current_issue_changed)
-        self.current_issue.Bind(wx.EVT_KEY_DOWN, self.evt_current_issue_changed)
+        self.current_issue.Bind(
+            wx.EVT_KEY_DOWN, self.evt_current_issue_changed)
         self.prev_issue.Bind(wx.EVT_BUTTON, self.evt_prev_issue)
         self.prev_issue.Bind(wx.EVT_KEY_DOWN, self.evt_prev_issue)
         self.next_issue.Bind(wx.EVT_BUTTON, self.evt_next_issue)
@@ -206,8 +207,8 @@ class FmtkTOCspotterGui(Frame):
         self.toc_not.Bind(wx.EVT_BUTTON, self.evt_untoc_spotted)
         self.toc_not.Bind(wx.EVT_KEY_DOWN, self.evt_untoc_spotted)
 
-    def __del__(self):
-        pass
+    # def __del__(self):
+    #     pass
 
     # Virtual event handlers, override them in your derived class
     def evt_update_csv_data(self, event):

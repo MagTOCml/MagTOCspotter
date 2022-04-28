@@ -15,45 +15,44 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import csv
 import os
+import random
 import shutil
-from datetime import date
 import threading
 from configparser import ConfigParser
+from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from threading import Thread
-
-import pandas as pd
-import wx
-# from urllib.request import Request, urlopen
 # import urllib.parse
-# from urllib.error import URLError, HTTPError
-from PIL import Image  # , ImageDraw
+from urllib.error import URLError, HTTPError
+from urllib.request import Request, urlopen
+# Workaround for Nuitka compilation issue
+# import Requests
+import certifi
+
+import wx
+from PIL import Image
 from pubsub import pub
 
-# import xmltodict as x2d
 import FmtkLeafGrabber as lg
 from FmtkTOCspotterGui import FmtkTOCspotterGui
 
 Image.MAX_IMAGE_PIXELS = 1000000000
 
 
-# Utility & dev one-offs likely not to survive...
-
-# def get_pages_from_scandata(scandata_xml):
-#     scandata = x2d.parse(scandata_xml)
-#     page_elements = scandata['book']['pageData']['page']
-#     return page_elements
-
-
-# Get a dataframe of all compmags issues...
-# df = pd.read_csv('tocdata/compmags_pubs.csv', header=0, index_col=False)
-# print(df.head(3))
-# print(df.tail(3))
-
-# Grab a random issue...
-# queue = df.sample(1)
-# print(queue)
+###########################################################################
+# Class TOCloc
+###########################################################################
+@dataclass
+class TOCloc:
+    """
+    A class to hold the location of a TOC file specific to the structure of
+    digital collections at the Internet Archive.
+    """
+    Item_id: str
+    Leaf_num: int
 
 
 ###########################################################################
@@ -62,16 +61,13 @@ Image.MAX_IMAGE_PIXELS = 1000000000
 class TOCspotterGui(FmtkTOCspotterGui):
     def __init__(self, *args, **kwds):
         FmtkTOCspotterGui.__init__(self, *args, **kwds)
+        if 'wxMac' in wx.PlatformInfo:
+            self.m_menuItem3.SetItemLabel('Mac: Quit from App Menu')
+            self.m_menuItem3.Enable(False)
+        self.Bind(wx.EVT_CLOSE, self.evt_quit_app)
         self.frame_statusbar.SetStatusWidths([150, -1])
         self.frame_statusbar.SetStatusText("Ready", 0)
         self.app = None
-
-    def __del__(self):
-        self.app.__del__()
-
-    def evt_quit_app(self, event):
-        self.__del__()
-        event.Skip()
 
     def evt_current_issue_changed(self, event):
         if event.ClassName == 'wxCommandEvent' or \
@@ -170,7 +166,6 @@ class TOCspotterGui(FmtkTOCspotterGui):
                  event.GetKeyCode() not in (wx.WXK_TAB, wx.WXK_SHIFT)):
             # If there is a next leaf image, show it...
             next_leaf = self.app.leaf_num + 1
-            # TODO: Check if leaf exists...
             if next_leaf <= self.app.queue_size - 1:
                 self.app.leaf_num += 1
                 self.show_page()
@@ -207,6 +202,7 @@ class TOCspotterGui(FmtkTOCspotterGui):
                         'queue_size'])
             self.queue_issues(event)
             self.app.check_toc()
+            self.more_pgs.Disable()
             self.next_pg.SetFocus()
             # event.Skip()
 
@@ -258,6 +254,9 @@ class TOCspotterGui(FmtkTOCspotterGui):
         if event.ClassName == 'wxCommandEvent' or \
                 (event.ClassName == 'wxKeyEvent' and
                  event.GetKeyCode() not in (wx.WXK_TAB, wx.WXK_SHIFT)):
+            # Show modal dialog to block input until done...
+            pass
+            # Download the next batch of issues...
             self.app.queue_next_batch()
             self.current_issue.SetSelection(0)
             self.next_pg.SetFocus()
@@ -287,6 +286,10 @@ class TOCspotterGui(FmtkTOCspotterGui):
                 self.more_issues.SetFocus()
         # event.Skip()
 
+    def evt_quit_app(self, event):
+        if event:
+            self.app.quit_app()
+            # event.Skip()
 
 # end of class FmtkTOCspotterGui
 
@@ -297,26 +300,28 @@ class TOCspotterGui(FmtkTOCspotterGui):
 class FmtkTOCspotterApp(wx.App):
     def __init__(self, redirect=False, filename=None, useBestVisual=False,
                  clearSigInt=True):
-        # Read the configuration file.
-        self.config = ConfigParser()
-        self.config.read('FmtkTOCspotterApp.ini')
-        self.leaf_queue_dir = self.config['Paths and Filenames'][
-            'leaf_queue_dir']
-        self.toc_img_dir = self.config['Paths and Filenames']['toc_img_dir']
-        self.max_height = int(self.config['Persistent variables']['max_height'])
-        self.queue_size = int(self.config['Persistent variables']['queue_size'])
-        self.more_pages = int(self.config['Persistent variables']['more_pages'])
-        self.save_toc_imgs = self.config['Persistent variables'].getboolean(
-            'save_toc_imgs')
-        # 'pfn' is the path and filename of the CSV-format TOC file, etc.
-        toc_pfn = self.config['Paths and Filenames']['spotted_tocs_pfn']
-        compmags_pfn = self.config['Paths and Filenames']['compmags_pfn']
-        done_pubs_pfn = self.config['Paths and Filenames']['done_pubs_pfn']
-        # Persistent local variables stored in the config file.
-        self.spotted_tocs = pd.read_csv(toc_pfn, header=0, index_col=False)
-        self.known_pubs = pd.read_csv(compmags_pfn, header=0, index_col=False)
-        self.done_pubs = pd.read_csv(done_pubs_pfn, header=0, index_col=False)
-        self.queued_pubs = self.known_pubs.sample(3)
+        # Var/attributes read from the configuration file and defined
+        # in the OnInit method.
+        self.done_pubs_pfn = None
+        self.tocs_pfn = None
+        self.compmags_pfn = None
+        self.save_toc_imgs = None
+        self.csv_fieldnames = None
+        self.queued_pubs = None
+        self.done_pubs = None
+        self.known_pubs = None
+        self.spotted_tocs = None
+        self.more_pages = None
+        self.queue_size = None
+        self.toc_img_dir = None
+        self.max_height = None
+        self.config = None
+        self.dl_dlg = None
+        self.sess_dlg = None
+
+        # Specify location of user's tocdata directory...
+        # TODO: Check how this works on Windows.
+        self.tocdata_dir = os.path.join(os.path.expanduser('~'), 'tocdata')
 
         # Session specific local variables
         self.pg_queue = {}
@@ -345,6 +350,7 @@ class FmtkTOCspotterApp(wx.App):
             self.max_height = wx.GetDisplaySize().Height - 88
         else:
             self.max_height = wx.GetDisplaySize().Height - 128
+        self.read_config()
         # Create the frame
         self.frame = TOCspotterGui(None)
         self.frame.app = self
@@ -352,45 +358,139 @@ class FmtkTOCspotterApp(wx.App):
         if self.more_pages == 1:
             self.frame.more_pgs.SetLabel('1 More Pg')
         self.frame.more_pgs.Disable()
-        self.frame.current_issue.Set(self.queued_pubs['Item_id'].values)
         self.frame.current_issue.SetSelection(0)
         self.frame.prev_issue.Disable()
-        self.queue_page_images()
-        self.frame.next_pg.SetFocus()
+        # Workaround for Nuitka SSL issue
+        cafile = certifi.where()
+        print('CA certs: ' + cafile, 1)
+        self.frame.more_issues.SetFocus()
         return True
 
     def read_config(self):
         self.config = ConfigParser()
-        self.config.read('FmtkTOCspotterApp.ini')
-        self.leaf_queue_dir = self.config['Paths and Filenames'][
-            'leaf_queue_dir']
-        self.toc_img_dir = self.config['Paths and Filenames']['toc_img_dir']
-        self.max_height = int(self.config['Persistent variables']['max_height'])
-        self.queue_size = int(self.config['Persistent variables']['queue_size'])
+        tocdir = self.tocdata_dir
+        self.config.read(os.path.join(tocdir, 'FmtkTOCspotterApp.ini'))
         # 'pfn' is the path and filename of the CSV-format TOC file, etc.
-        toc_pfn = self.config['Paths and Filenames']['spotted_tocs_pfn']
-        compmags_pfn = self.config['Paths and Filenames']['compmags_pfn']
-        done_pubs_pfn = self.config['Paths and Filenames']['done_pubs_pfn']
+        self.toc_img_dir = os.path.join(tocdir,
+                                        self.config['Paths and Filenames'][
+                                            'toc_img_dir'])
+        self.tocs_pfn = os.path.join(tocdir, self.config['Paths and Filenames'][
+            'spotted_tocs_pfn'])
+        self.compmags_pfn = os.path.join(tocdir, self.config['Paths and '
+                                                             'Filenames'][
+            'compmags_pfn'])
+        self.done_pubs_pfn = os.path.join(tocdir, self.config['Paths and '
+                                                              'Filenames'][
+            'done_pubs_pfn'])
         # Persistent local variables stored in the config file.
-        self.spotted_tocs = pd.read_csv(toc_pfn, header=0, index_col=False)
-        self.known_pubs = pd.read_csv(compmags_pfn, header=0, index_col=False)
-        self.done_pubs = pd.read_csv(done_pubs_pfn, header=0, index_col=False)
-        self.queued_pubs = self.known_pubs.sample(3)
+        self.max_height = int(
+            self.config['Persistent variables']['max_height'])
+        self.queue_size = int(
+            self.config['Persistent variables']['queue_size'])
+        self.save_toc_imgs = bool(self.config['Persistent variables'][
+            'save_toc_imgs'])
+        self.more_pages = int(
+            self.config['Persistent variables']['more_pages'])
+        # Read the project's master list of known computer magazines in the
+        # collections of the Internet Archive.
+        self.known_pubs = self.read_csv(self.compmags_pfn)
+        self.queued_pubs = random.sample(self.known_pubs, 3)
+        self.csv_fieldnames = {
+            self.tocs_pfn: ['Item_id', 'Leaf_num'],
+            self.done_pubs_pfn: ['Item_id']
+        }
+        # self.update_csv_data()
+
+    def read_csv(self, pfn_url):
+        """
+        :param pfn_url: Path and filename or URL of the CSV-format TOC file.
+        :return list: compmags & done_pubs are item_id only, spotted_tocs
+                      are Item_id and Leaf_num TOCloc dataclass instances.
+        """
+        if pfn_url.startswith('http'):
+            # If the URL starts with http, we assume it's a URL to a CSV file.
+            request = Request(pfn_url)
+            try:
+                reply = urlopen(request)
+            except HTTPError as err:
+                wx.CallAfter(lambda *a: pub.sendMessage(
+                    "file_not_found",
+                    err_msg='The server could not fulfill the request.',
+                    err_code=404))
+            except URLError as err:
+                wx.CallAfter(lambda *a: pub.sendMessage(
+                    "server_not_found",
+                    err_msg='We failed to reach a server.',
+                    err_code=err.reason))
+            else:
+                flo = reply.read().decode('utf-8')
+                reader = csv.DictReader(flo.splitlines())
+                return self.get_csv_data(reader)
+        else:
+            # Otherwise, we assume it's a local file.
+            pfn_url = os.path.join(os.getcwd(), pfn_url)
+            with open(pfn_url, newline='') as csvfile:
+                reader = csv.DictReader(csvfile)
+                return self.get_csv_data(reader)
+        return []
+
+    @staticmethod
+    def get_csv_data(reader):
+        """
+        :param reader: A csv.DictReader object.
+        :return:
+        """
+        result_list = []
+        if len(reader.fieldnames) == 1:
+            for row in reader:
+                result_list.append(row[reader.fieldnames[0]])
+        else:
+            for row in reader:
+                toc_loc = TOCloc(row[reader.fieldnames[0]],
+                                 row[reader.fieldnames[1]])
+                result_list.append(toc_loc)
+        return result_list
+
+    def write_csv(self, pfn, data):
+        field_names = self.csv_fieldnames[pfn]
+        with open(pfn, 'w', newline='') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=field_names)
+            writer.writeheader()
+            if len(field_names) == 1:
+                for item in data:
+                    writer.writerow({field_names[0]: item})
+            else:
+                for item in data:
+                    writer.writerow({field_names[0]: item.Item_id,
+                                     field_names[1]: item.Leaf_num})
 
     def queue_page_images(self, item_id=None):
-        # When an issue is selected/set in the issue choice widget, get its
-        # first self.queue_size page images
+        self.popup_download_progress_dlg()
+
         if item_id is None:
             # Get page images for all issues in the issue choice widget...
             self.frame.StatusBar.SetStatusText('Getting queued issue '
                                                'images...', 1)
-            for issue_id in self.queued_pubs['Item_id'].values:
+            for issue_id in self.queued_pubs:
                 for leaf_num in range(0, self.queue_size):
                     self.grab_leaf(issue_id, leaf_num)
         else:
+            # When an issue is selected/set in the issue choice widget, get its
+            # first self.queue_size page images
             self.frame.StatusBar.SetStatusText('Getting new issue images', 1)
             for leaf_num in range(0, self.queue_size):
                 self.grab_leaf(item_id, leaf_num)
+
+    def popup_download_progress_dlg(self):
+        # Create a ProgressDialog to show the user the progress of the
+        # downloading.
+        self.dl_dlg = wx.ProgressDialog(
+            'Downloading page images',
+            'Wait while downloading page images...',
+            maximum=100,
+            parent=self.frame,
+            style=wx.PD_AUTO_HIDE | wx.PD_ELAPSED_TIME)
+        self.dl_dlg.Show()
 
     def queue_next_batch(self):
         """
@@ -399,15 +499,14 @@ class FmtkTOCspotterApp(wx.App):
         :return: list of next pubs
         """
         self.log_done_pub(self.frame.current_issue.GetStringSelection())
-        next_pubs = pd.DataFrame(columns=['Item_id'])
-        while len(next_pubs) < 3:
-            next_pub = self.known_pubs.sample(1)
-            if next_pub.values[0][0] not in self.done_pubs['Item_id'].tolist():
-                next_pubs = next_pubs.append([{'Item_id': next_pub.values[0][
-                    0]}], ignore_index=True)
+        next_pubs = []
+        while not next_pubs or len(next_pubs) < 3:
+            next_pub = random.sample(self.known_pubs, 1)[0]
+            if next_pub not in self.done_pubs:
+                next_pubs.append(next_pub)
             continue
         self.queued_pubs = next_pubs.copy()
-        self.frame.current_issue.Set(self.queued_pubs['Item_id'].values)
+        self.frame.current_issue.Set(self.queued_pubs)
         self.frame.current_issue.SetSelection(0)
         self.frame.prev_issue.Disable()
         self.frame.next_issue.Enable()
@@ -418,6 +517,8 @@ class FmtkTOCspotterApp(wx.App):
         self.frame.next_pg.SetFocus()
 
     def queue_updated(self, item_id, leaf_num, pil_img, pil_sm_img):
+        # Update the dl_dlg with the current progress.
+        self.dl_dlg.Pulse('Wait while grabbing leaf images...')
         # An image has come back, update the statusbar...
         self.downloads_pending -= 1
         self.frame.StatusBar.SetStatusText('Downloads pending: ' +
@@ -437,6 +538,7 @@ class FmtkTOCspotterApp(wx.App):
         if self.downloads_pending == 0:
             self.frame.StatusBar.SetStatusText('Downloads done.', 0)
             self.frame.StatusBar.SetStatusText('', 1)
+            self.dl_dlg.Update(100)
         if self.leaf_num <= self.queue_size - 1:
             self.frame.next_pg.Enable()
             self.frame.next_pg.SetFocus()
@@ -461,7 +563,7 @@ class FmtkTOCspotterApp(wx.App):
         except KeyError:
             # print('No image for', item_id, 'leaf:', str(self.leaf_num))
             self.frame.StatusBar.SetStatusText('No Image Available', 1)
-            pil_image = Image.open('./resources/NoImgAvbl.png', 'r')
+            pil_image = Image.open('./tocdata/NoImgAvbl.png', 'r')
             self.no_img_flag = True
         display_width = self.frame.page_img.GetChildren()[0].Size.Width
         resize_percent = display_width / pil_image.size[0]
@@ -481,6 +583,9 @@ class FmtkTOCspotterApp(wx.App):
         return self.buffer
 
     def get_more_pages(self, item_id):
+        self.frame.more_pgs.Disable()
+        self.frame.toc_spotted.Enable()
+        self.popup_download_progress_dlg()
         # Get the next page of the current issue
         self.frame.StatusBar.SetStatusText('Getting more pages', 1)
         self.queue_size = self.queue_size + self.more_pages
@@ -491,19 +596,22 @@ class FmtkTOCspotterApp(wx.App):
     def grab_leaf(self, item_id, leaf_num):
         # Grab the leaf and add it to the queue
         self.downloads_pending += 1
+        self.dl_dlg.Pulse('Wait while grabbing leaf images...')
         self.frame.StatusBar.SetStatusText(
             'Downloads pending: ' + str(self.downloads_pending), 0)
         leaf_grabber = Thread(target=lg.FmtkLeafGrabber,
                               args=[item_id, leaf_num, None,
-                                    self.leaf_queue_dir, self.max_height,
+                                    None, self.max_height,
                                     self.sema4, self.image_pool])
         if leaf_grabber is not None:
-            leaf_grabber.setDaemon(True)
+            # leaf_grabber.setDaemon(True)
+            leaf_grabber.daemon = True
             leaf_grabber.start()
 
     def save_toc_image(self):
         item_id = self.frame.current_issue.GetStringSelection()
-        toc_fname = item_id + '_tocleaf_' + str(self.leaf_num).zfill(4) + '.jpg'
+        toc_fname = item_id + '_tocleaf_' + \
+            str(self.leaf_num).zfill(4) + '.jpg'
         save_img_path = self.toc_img_dir + toc_fname
         leaf_file = Path(save_img_path)
         if not leaf_file.is_file():
@@ -528,53 +636,37 @@ class FmtkTOCspotterApp(wx.App):
             self.frame.StatusBar.SetStatusText('Not found: ' + toc_fname, 1)
 
     def forget_toc(self, item_id, leaf_num):
-        self.spotted_tocs = self.spotted_tocs.drop(
-            self.spotted_tocs[(self.spotted_tocs['Item_id'] == item_id) &
-                              (self.spotted_tocs['Leaf_num'] ==
-                               leaf_num)].index)
-        self.spotted_tocs.to_csv('./tocdata/spotted_tocs.csv', header=True,
-                                 index=False)
+        self.spotted_tocs.remove(TOCloc(item_id, leaf_num))
+        self.write_csv(self.tocs_pfn, self.spotted_tocs)
         self.frame.StatusBar.SetStatusText('Forgot toc: ' + item_id +
                                            'leaf: ' + str(leaf_num), 1)
         self.frame.toc_spotted.Enable()
         self.frame.toc_not.Disable()
 
     def log_spotted_toc(self, item_id, leaf_num):
-        new_toc = {'Item_id': item_id, 'Leaf_num': leaf_num}
-        self.spotted_tocs = self.spotted_tocs.append(new_toc, ignore_index=True)
-        self.spotted_tocs = self.spotted_tocs.sort_values('Item_id')
-        self.spotted_tocs.to_csv('./tocdata/spotted_tocs.csv', header=True,
-                                 index=False)
+        new_toc = TOCloc(item_id, leaf_num)
+        self.spotted_tocs.append(new_toc)
+        self.spotted_tocs.sort(key=lambda x: x.Item_id)
+        self.write_csv(self.tocs_pfn, self.spotted_tocs)
         pass
 
     def log_done_pub(self, item_id):
-        done_pub = {'Item_id': item_id}
-        self.done_pubs = self.done_pubs.append(done_pub, ignore_index=True)
-        self.done_pubs = self.done_pubs.sort_values('Item_id')
-        self.done_pubs.to_csv('./tocdata/done_pubs.csv', header=True,
-                              index=False)
+        self.done_pubs.append(item_id)
+        self.done_pubs.sort()
+        self.write_csv(self.done_pubs_pfn, self.done_pubs)
 
     def check_toc(self, item_id=None, leaf_num=None):
         # Check if this toc has been spotted before...
         if item_id is None:
             item_id = self.frame.current_issue.GetStringSelection()
             leaf_num = self.leaf_num
-        if self.spotted_tocs.empty:
+        if len(self.spotted_tocs) == 0:
             self.frame.toc_spotted.Enable()
             self.frame.toc_not.Disable()
         else:
-            toc_row = self.spotted_tocs.loc[
-                (self.spotted_tocs['Item_id'] == item_id) &
-                (self.spotted_tocs['Leaf_num'] == leaf_num)]
-            if toc_row.empty:
-                if self.no_img_flag:
-                    self.frame.toc_spotted.Disable()
-                    self.frame.toc_not.Disable()
-                    self.no_img_flag = False
-                else:
-                    self.frame.toc_spotted.Enable()
-                    self.frame.toc_not.Disable()
-            else:
+            # Find TOCloc object in spotted_tocs
+            toc_loc = TOCloc(item_id, leaf_num)
+            if toc_loc in self.spotted_tocs:
                 if self.no_img_flag:
                     self.frame.toc_spotted.Disable()
                     self.frame.toc_not.Disable()
@@ -583,41 +675,73 @@ class FmtkTOCspotterApp(wx.App):
                     self.frame.toc_spotted.Disable()
                     self.frame.toc_not.Enable()
                 return True
+            else:
+                if self.no_img_flag:
+                    self.frame.toc_spotted.Disable()
+                    self.frame.toc_not.Disable()
+                    self.no_img_flag = False
+                else:
+                    self.frame.toc_spotted.Enable()
+                    self.frame.toc_not.Disable()
         return False
 
     def update_csv_data(self):
-        dlg = wx.MessageDialog(None, "Do you want to update your CSV tocdata "
-                                     "files? \n (Current files are archived.)",
-                               "Update CSV", wx.YES_NO | wx.ICON_QUESTION)
+        dlg = wx.MessageDialog(None, "Do you want to continue TOC spotting "
+                                     "with your current CSV tocdata or archive "
+                                     "these files and begin a new session?",
+                               "Continue or Archive Data-gathering",
+                               wx.YES_NO |
+                               wx.ICON_QUESTION)
+        dlg.SetYesNoLabels("Continue", "Archive")
         result = dlg.ShowModal()
-        if result == wx.ID_YES:
+        if result == wx.ID_NO:
             date_str = date.today().strftime('%m%d%y')
 
             # Archive current files
-            if not os.path.exists('./tocdata/archive'):
-                os.makedirs('./tocdata/archive')
-            if os.path.exists('./tocdata/spotted_tocs.csv'):
-                shutil.move('./tocdata/spotted_tocs.csv',
-                            f'./tocdata/archive/spotted_tocs_{date_str}.csv')
-            if os.path.exists('./tocdata/done_pubs.csv'):
-                shutil.move('./tocdata/done_pubs.csv',
-                            f'./tocdata/archive/done_pubs_{date_str}.csv')
+            archive_dir = os.path.join(self.tocdata_dir, 'archive')
+            if not os.path.exists(archive_dir):
+                os.makedirs(archive_dir)
+            if os.path.exists(self.tocs_pfn):
+                for x in 'abcdefghijklmnopqrstuvwxyz':
+                    archive_name = os.path.join(archive_dir,
+                                                f'spotted_tocs{date_str}'
+                                                f'{x}.csv')
+                    if os.path.exists(archive_name):
+                        continue
+                    else:
+                        shutil.move(self.tocs_pfn, archive_name)
+                        break
+            if os.path.exists(self.done_pubs_pfn):
+                for x in 'abcdefghijklmnopqrstuvwxyz':
+                    archive_name = os.path.join(archive_dir,
+                                                f'done_pubs{date_str}'
+                                                f'{x}.csv')
+                    if os.path.exists(archive_name):
+                        continue
+                    else:
+                        shutil.move(self.done_pubs_pfn, archive_name)
+                        break
             # Update current files
             st_url = "https://raw.githubusercontent.com/MagTOCml/MagTOCdata" \
                      "/main/tocdata/spotted_tocs.csv"
             dp_url = "https://raw.githubusercontent.com/MagTOCml/MagTOCdata" \
                      "/main/tocdata/done_pubs.csv"
-            self.spotted_tocs = pd.read_csv(st_url, header=0, index_col=False)
-            self.spotted_tocs.to_csv('./tocdata/spotted_tocs.csv', header=True,
-                                     index=False)
-            self.done_pubs = pd.read_csv(dp_url, header=0, index_col=False)
-            self.done_pubs.to_csv('./tocdata/done_pubs.csv', header=True,
-                                  index=False)
-            self.frame.StatusBar.SetStatusText('Updated and archived CSV '
-                                               'files.', 1)
+            self.spotted_tocs = self.read_csv(st_url)
+            self.write_csv(self.tocs_pfn, self.spotted_tocs)
+            self.done_pubs = self.read_csv(dp_url)
+            self.write_csv(self.done_pubs_pfn, self.done_pubs)
+            if self.frame is not None:
+                self.frame.StatusBar.SetStatusText('Updated and archived CSV '
+                                                   'files.', 1)
         else:
-            self.frame.StatusBar.SetStatusText('CSV files not updated.', 1)
+            if self.frame is not None:
+                self.frame.StatusBar.SetStatusText('CSV files not updated.', 1)
+            self.spotted_tocs = self.read_csv(self.tocs_pfn)
+            self.done_pubs = self.read_csv(self.done_pubs_pfn)
 
+    def quit_app(self):
+        self.frame.Close()
+        self.frame.Destroy()
 
 # end of class FmtkTOCspotterApp
 
@@ -626,4 +750,5 @@ if __name__ == "__main__":
     app = FmtkTOCspotterApp()
     app.SetTopWindow(app.frame)
     app.frame.Show()
+    app.update_csv_data()
     app.MainLoop()
