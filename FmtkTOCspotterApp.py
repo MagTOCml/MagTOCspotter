@@ -289,7 +289,7 @@ class TOCspotterGui(FmtkTOCspotterGui):
     def evt_quit_app(self, event):
         if event:
             self.app.quit_app()
-            # event.Skip()
+            event.Skip()
 
 # end of class FmtkTOCspotterGui
 
@@ -498,7 +498,8 @@ class FmtkTOCspotterApp(wx.App):
         then queue their page images and update the issues choice widget.
         :return: list of next pubs
         """
-        self.log_done_pub(self.frame.current_issue.GetStringSelection())
+        if self.frame.current_issue.GetStringSelection() != "'Next batch' to begin...":
+            self.log_done_pub(self.frame.current_issue.GetStringSelection())
         next_pubs = []
         while not next_pubs or len(next_pubs) < 3:
             next_pub = random.sample(self.known_pubs, 1)[0]
@@ -563,7 +564,7 @@ class FmtkTOCspotterApp(wx.App):
         except KeyError:
             # print('No image for', item_id, 'leaf:', str(self.leaf_num))
             self.frame.StatusBar.SetStatusText('No Image Available', 1)
-            pil_image = Image.open('./tocdata/NoImgAvbl.png', 'r')
+            pil_image = Image.open(self.tocdata_dir + '/NoImgAvbl.png', 'r')
             self.no_img_flag = True
         display_width = self.frame.page_img.GetChildren()[0].Size.Width
         resize_percent = display_width / pil_image.size[0]
@@ -740,7 +741,6 @@ class FmtkTOCspotterApp(wx.App):
             self.done_pubs = self.read_csv(self.done_pubs_pfn)
 
     def quit_app(self):
-        self.frame.Close()
         self.frame.Destroy()
 
 # end of class FmtkTOCspotterApp
